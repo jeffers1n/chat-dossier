@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Досье переписки · архив дела</title>
+  <link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script>
+</head>
+<body>
+<header class="site-header"><a href="/" class="brand" aria-label="Архив дела, наверх"><span class="brand-mark">⌕</span> АРХИВ ДЕЛА</a><span class="header-caption">Частное расследование проектных решений</span><span id="apiStatus" class="connection">Проверяем подключение…</span></header>
+<main>
+  <section class="intro" aria-labelledby="pageTitle"><p class="eyebrow">ДЕЛО № 001 / ЦИФРОВЫЕ УЛИКИ</p><h1 id="pageTitle">У каждого решения<br>есть след в переписке.</h1><p class="lead">Загрузите проектный чат. Соберите хронологию решений и обещаний — с точной цитатой для каждой улики.</p></section>
+  <section class="upload" aria-labelledby="uploadTitle"><div class="upload-heading"><div><p class="step">01 / МАТЕРИАЛЫ ДЕЛА</p><h2 id="uploadTitle">Переписка</h2></div><span class="format">Telegram JSON или TXT · до 600 тыс. символов</span></div>
+    <label class="dropzone" id="dropzone"><span class="drop-icon">↥</span><strong>Перетащите файл сюда</strong><span>или нажмите, чтобы выбрать</span><input id="file" type="file" accept=".json,.txt,application/json,text/plain"></label>
+    <div id="selection" class="selection" hidden><span aria-hidden="true">▣</span><div><strong id="fileName"></strong><small id="fileSize"></small></div><button id="clearFile" class="text-button" type="button">Убрать</button></div>
+    <details class="paste"><summary>Вставить текст вручную</summary><label for="content">Одно сообщение на строке; дату и автора можно указать в начале</label><textarea id="content" placeholder="[2026-10-20 10:00] Анна: Решили запустить MVP в пятницу."></textarea></details>
+    <div class="upload-bottom"><div class="privacy"><span aria-hidden="true">◈</span><p>При анализе текст уйдёт выбранному API-провайдеру. В приложении чат на диск не сохраняется.</p></div><div class="actions"><button id="demo" class="secondary" type="button">Открыть учебное дело</button><button id="analyze" class="primary" type="button">Начать расследование <span aria-hidden="true">↗</span></button></div></div>
+  </section>
+  <div id="status" class="status" role="status" aria-live="polite" hidden></div>
+  <section id="result" hidden aria-labelledby="resultTitle"><div class="result-header"><div><p class="step" id="mode"></p><h2 id="resultTitle" tabindex="-1">Хронология дела</h2><p id="resultSummary" class="result-subtitle"></p></div><button id="download" class="secondary" type="button">Скачать результат ↓</button></div>
+    <div id="resultCaveat" class="caveat" role="note"></div><div id="filters" class="filters" aria-label="Фильтр событий"></div>
+    <div class="workspace"><div id="timeline" class="timeline"></div><aside id="sourcePanel" class="source-panel" aria-labelledby="sourceTitle"><div class="source-top"><p class="step">КАРТОТЕКА / ПЕРВОИСТОЧНИК</p><h3 id="sourceTitle">Материал дела</h3><p class="source-hint">Нажмите цитату — здесь откроется её источник.</p></div><div id="sourceDetail"></div><div class="source-nav"><button id="prevSource" class="secondary" type="button">← Ранее</button><span id="sourceCounter"></span><button id="nextSource" class="secondary" type="button">Позже →</button></div></aside></div>
+  </section>
+</main><footer><span>⌕ АРХИВ ДЕЛА</span><span>Выводы модели проверяйте по исходным сообщениям.</span></footer>
+</body></html>

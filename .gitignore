@@ -1,0 +1,19 @@
+__pycache__/
+*.pyc
+.venv/
+.env
+.env.*
+*.log
+*.key
+*.pem
+result.json
+ChatExport_*/
+chat-investigation*.json
+predictions-private*.json
+.DS_Store
+.idea/
+
+# Старые снимки интерфейса
+preview.png
+demo-feedback.png
+portfolio-home.png
