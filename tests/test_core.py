@@ -89,6 +89,54 @@ class CoreTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'HTTP 429'):
                 analyze(parse_chat('text'))
 
+    def test_gemini_falls_back_on_429_and_keeps_evidence(self):
+        from unittest.mock import MagicMock
+        calls=[]
+        def response(request, timeout, context=None):
+            payload=json.loads(request.data)
+            calls.append(payload['model'])
+            if payload['model']=='gemini-3.6-flash':
+                raise urllib.error.HTTPError(request.full_url,429,'Quota',{},None)
+            event={'category':'decision','title':'Запуск 1 ноября','evidence':[{'message_id':'m1','quote':'Решили запуск 1 ноября.'}]}
+            mock=MagicMock()
+            mock.__enter__.return_value.read.return_value=json.dumps({'choices':[{'message':{'content':json.dumps({'events':[event]})}}]}).encode()
+            return mock
+        with patch.dict('os.environ',{'GEMINI_API_KEY':'test','LLM_API_KEY':'','LLM_MODEL':''}),patch('urllib.request.urlopen',side_effect=response):
+            result=analyze(parse_chat('Решили запуск 1 ноября.'))
+        self.assertEqual(calls,['gemini-3.6-flash','gemini-3.5-flash-lite'])
+        self.assertTrue(result['fallback_used'])
+        self.assertEqual(result['model'],'gemini-3.5-flash-lite')
+        self.assertEqual(result['events'][0]['evidence'][0]['message_id'],'m1')
+
+    def test_gemini_stays_on_fallback_for_later_parts(self):
+        from unittest.mock import MagicMock
+        messages=parse_chat('\n'.join(f'[{i}] A: ' + 'x'*70 for i in range(400)))
+        calls=[]
+        def response(request, timeout, context=None):
+            payload=json.loads(request.data)
+            calls.append(payload['model'])
+            if payload['model']=='gemini-3.6-flash':
+                raise urllib.error.HTTPError(request.full_url,503,'Unavailable',{},None)
+            mock=MagicMock()
+            mock.__enter__.return_value.read.return_value=b'{"choices":[{"message":{"content":"{\\\"events\\\":[]}"}}]}'
+            return mock
+        with patch.dict('os.environ',{'GEMINI_API_KEY':'test','LLM_API_KEY':'','LLM_MODEL':''}),patch('urllib.request.urlopen',side_effect=response):
+            result=analyze(messages)
+        self.assertEqual(calls.count('gemini-3.6-flash'),1)
+        self.assertEqual(calls.count('gemini-3.5-flash-lite'),result['parts']+1)
+        self.assertEqual(result['reconciliation'],'complete')
+        self.assertTrue(result['fallback_used'])
+
+    def test_both_gemini_models_unavailable_reports_error(self):
+        calls=[]
+        def response(request, timeout, context=None):
+            calls.append(json.loads(request.data)['model'])
+            raise urllib.error.HTTPError(request.full_url,429,'Quota',{},None)
+        with patch.dict('os.environ',{'GEMINI_API_KEY':'test','LLM_API_KEY':'','LLM_MODEL':''}),patch('urllib.request.urlopen',side_effect=response):
+            with self.assertRaisesRegex(ValueError,'HTTP 429'):
+                analyze(parse_chat('Решили запуск.'))
+        self.assertEqual(calls,['gemini-3.6-flash','gemini-3.5-flash-lite'])
+
     def test_cross_chunk_change_and_closed_question(self):
         from unittest.mock import MagicMock
         rows=['Кто согласует дату?','Решили запуск 10 июня.']

@@ -16,6 +16,7 @@ CHUNK_CHARS = 16_000
 RECONCILE_CHARS = 90_000
 GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/openai'
 GEMINI_MODEL = 'gemini-3.6-flash'
+GEMINI_FALLBACK_MODEL = 'gemini-3.5-flash-lite'
 EVENT_SCHEMA = {'type': 'object', 'properties': {'events': {'type': 'array', 'items': {'type': 'object', 'properties': {'category': {'type': 'string'}, 'title': {'type': 'string'}, 'evidence': {'type': 'array', 'items': {'type': 'object', 'properties': {'message_id': {'type': 'string'}, 'quote': {'type': 'string'}}, 'required': ['message_id', 'quote']}}}, 'required': ['category', 'title', 'evidence']}}}, 'required': ['events']}
 
 
@@ -204,28 +205,40 @@ def analyze(messages):
         raise ValueError('LLM_BASE_URL должен использовать HTTPS (для локального API допустим HTTP).')
     model = os.environ.get('LLM_MODEL') or (GEMINI_MODEL if gemini else 'gpt-4o-mini')
     chunks = chunk_messages(messages)
+    active_model = model
+    models_used = []
 
     def ask(prompt, rows, stage):
-        payload = {'model': model, 'messages': [{'role': 'system', 'content': prompt},
-                   {'role': 'user', 'content': json.dumps(rows, ensure_ascii=False)}],
-                   'response_format': {'type': 'json_schema', 'json_schema': {'name': 'chat_events', 'schema': EVENT_SCHEMA}} if gemini else {'type': 'json_object'}}
-        request = urllib.request.Request(base + '/chat/completions', data=json.dumps(payload).encode(),
-                    headers={'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json'})
-        for attempt in range(4):
-            try:
-                with urllib.request.urlopen(request, timeout=90, context=tls_context() if base.startswith('https://') else None) as response:
-                    result = json.loads(response.read(2_000_000))
-                break
-            except urllib.error.HTTPError as exc:
-                if exc.code in (502, 503, 504) and attempt < 3:
-                    retry_after = exc.headers.get('Retry-After') if exc.headers else None
-                    delay = float(retry_after) if retry_after and retry_after.isdecimal() else 2 ** attempt
-                    time.sleep(min(max(delay, 0), 8))
-                    continue
-                extra = ' После 4 попыток.' if exc.code in (502, 503, 504) else ''
-                raise APIRequestError(f'{stage}: {http_error_message(exc.code)}{extra} Результат неполный и не показан.', exc.code) from None
-            except (urllib.error.URLError, TimeoutError) as exc:
-                raise ValueError(f'{stage}: {connection_error_message(exc)} Результат неполный и не показан.') from None
+        nonlocal active_model
+
+        def send(model_name, retries):
+            payload = {'model': model_name, 'messages': [{'role': 'system', 'content': prompt},
+                       {'role': 'user', 'content': json.dumps(rows, ensure_ascii=False)}],
+                       'response_format': {'type': 'json_schema', 'json_schema': {'name': 'chat_events', 'schema': EVENT_SCHEMA}} if gemini else {'type': 'json_object'}}
+            request = urllib.request.Request(base + '/chat/completions', data=json.dumps(payload).encode(),
+                        headers={'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json'})
+            for attempt in range(retries):
+                try:
+                    with urllib.request.urlopen(request, timeout=90, context=tls_context() if base.startswith('https://') else None) as response:
+                        return json.loads(response.read(2_000_000))
+                except urllib.error.HTTPError as exc:
+                    if exc.code in (502, 503, 504) and attempt < retries - 1:
+                        retry_after = exc.headers.get('Retry-After') if exc.headers else None
+                        delay = float(retry_after) if retry_after and retry_after.isdecimal() else 2 ** attempt
+                        time.sleep(min(max(delay, 0), 8))
+                        continue
+                    extra = f' После {retries} попыток.' if exc.code in (502, 503, 504) and retries > 1 else ''
+                    raise APIRequestError(f'{stage}: {http_error_message(exc.code)}{extra} Результат неполный и не показан.', exc.code) from None
+                except (urllib.error.URLError, TimeoutError) as exc:
+                    raise ValueError(f'{stage}: {connection_error_message(exc)} Результат неполный и не показан.') from None
+
+        try:
+            result = send(active_model, 1 if gemini and active_model != GEMINI_FALLBACK_MODEL else 4)
+        except APIRequestError as exc:
+            if not (gemini and active_model != GEMINI_FALLBACK_MODEL and (exc.status_code == 429 or exc.status_code >= 500)):
+                raise
+            active_model = GEMINI_FALLBACK_MODEL
+            result = send(active_model, 4)
         try:
             choice = result['choices'][0]
             if choice.get('finish_reason') in ('length', 'content_filter', 'safety'):
@@ -233,7 +246,10 @@ def analyze(messages):
             content = choice['message']['content']
             if not isinstance(content, str):
                 raise ValueError('Ответ модели пуст.')
-            return json.loads(content)
+            data = json.loads(content)
+            if active_model not in models_used:
+                models_used.append(active_model)
+            return data
         except (ValueError, KeyError, IndexError, TypeError):
             raise ValueError(f'{stage}: некорректный или неполный ответ API. Результат не показан.') from None
 
@@ -256,9 +272,9 @@ def analyze(messages):
             try:
                 data = ask(RECONCILE_PROMPT, compact, 'Сверка всего чата')
             except APIRequestError as exc:
-                if exc.status_code != 429:
+                if exc.status_code != 429 and exc.status_code < 500:
                     raise
-                reconciliation = 'skipped_rate_limited'
+                reconciliation = 'skipped_rate_limited' if exc.status_code == 429 else 'skipped_api_unavailable'
             else:
                 try:
                     checked = validate_analysis(data, messages)
@@ -278,6 +294,8 @@ def analyze(messages):
     result = validate_analysis({'events': deduplicate(combined)}, messages)
     result['rejected'] += rejected
     result['parts'] = len(chunks)
-    result['model'] = model
+    result['model'] = models_used[-1] if models_used else active_model
+    result['models_used'] = models_used
+    result['fallback_used'] = GEMINI_FALLBACK_MODEL in models_used and model != GEMINI_FALLBACK_MODEL
     result['reconciliation'] = reconciliation
     return result
